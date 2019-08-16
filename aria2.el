@@ -280,13 +280,14 @@ With prefix remove all applicable downloads."
         map)
     "Keymap for `aria2-mode'.")
 
+;;;###autoload
 (defun aria2-maybe-do-stuff-on-emacs-exit ()
     "Hook ran when quitting emacs."
     (when (and aria2c--bin (Running? aria2c--bin))
         (Save aria2c--bin)
         (when aria2c-kill-process-on-emacs-exit (Shutdown! aria2c--bin t))))
 
-(add-hook 'aria2-mode-hook #'(lambda () (add-hook 'kill-emacs-hook #'aria2-maybe-do-stuff-on-emacs-exit)))
+(add-hook 'aria2-mode-hook #'(lambda () (and (not (memq #'aria2-maybe-do-stuff-on-emacs-exit kill-emacs-hook)) (add-hook 'kill-emacs-hook #'aria2-maybe-do-stuff-on-emacs-exit))))
 (add-hook 'aria2-mode-hook #'(lambda () (hl-line-mode 1)))
 
 (define-derived-mode aria2-mode tabulated-list-mode "Aria2"
@@ -301,20 +302,19 @@ With prefix remove all applicable downloads."
             (error (setq aria2c--bin (make-instance aria2c-exe
                                        "aria2c-exe"
                                        :file aria2c--bin-file)))))
-
-    (setq tabulated-list-format aria2--list-format)
+    (setq-local tabulated-list-format aria2--list-format)
+    (setq-local mode-line-format aria2-mode-line-format)
+    (setq-local tabulated-list-entries #'aria2--list-entries)
     (tabulated-list-init-header)
-    (setq tabulated-list-entries #'aria2--list-entries)
     (tabulated-list-print)
     (aria2--start-timers)
-    (with-current-buffer aria2-list-buffer-name (setq-local mode-line-format aria2-mode-line-format))
     (run-hooks 'aria2-mode-hook))
 
 ;;;###autoload
 (defun aria2-downloads-list ()
     "Display aria2 downloads list.  Enable `aria2-mode' to controll the process."
     (interactive)
-    (with-current-buffer (pop-to-buffer aria2-list-buffer-name)
+    (with-current-buffer aria2-list-buffer-name
         (aria2-mode))
     (message
         (substitute-command-keys
