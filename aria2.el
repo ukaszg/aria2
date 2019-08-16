@@ -30,28 +30,19 @@
 
 ;;; Code:
 
-(require 'eieio-base)
-(require 'subr-x)
-(require 'tabulated-list)
-
 (defgroup aria2 nil
     "An interface for aria2c command."
     :group 'external
     :group 'execute
     :prefix "aria2-")
 
+(defvar aria2--debug nil
+    "Should json commands and replies be printed.")
+
 (defcustom aria2-mode-hook nil
     "Hook ran afer enabling `aria2-mode'."
     :type 'hook
     :group 'aria2)
-
-(require 'aria2-exe)
-(require 'aria2-refresh)
-(require 'aria2-faces)
-(require 'aria2-tview)
-
-(defvar aria2--debug nil
-    "Should json commands and replies be printed.")
 
 (defcustom aria2-add-evil-quirks (not (string-empty-p (locate-library "evil")))
     "If t adds aria2-mode to emacs states, and binds \C-w.")
@@ -67,6 +58,12 @@
             (define-key aria2-mode-map "\C-w" 'evil-window-map))))
 
 (add-hook 'aria2-mode-hook #'aria2-maybe-add-evil-quirks)
+
+(require 'tabulated-list)
+(require 'aria2-exe)
+(require 'aria2-refresh)
+(require 'aria2-faces)
+(require 'aria2-tview)
 
 ;; Interactive commands start here
 
@@ -179,19 +176,17 @@
     "Set download status to 'removed'."
     (interactive "P")
     (when (y-or-n-p "Really remove download? ")
-        (remove-download aria2c--bin (tabulated-list-get-id) (not (equal nil arg)))
+        (RemoveResult aria2c--bin (tabulated-list-get-id) (not (eq nil arg)))
         (tabulated-list-delete-entry)))
 
 (defun aria2-clean-removed-download (arg)
     "Clean download with 'removed/completed/error' status.
 With prefix remove all applicable downloads."
     (interactive "P")
-    (if (equal nil arg)
-        (progn
-            (removeDownloadResult aria2c--bin (tabulated-list-get-id))
-            (revert-buffer))
-        (PurgeResult aria2c--bin)
-        (revert-buffer)))
+    (if (eq nil arg)
+        (RemoveResult aria2c--bin (tabulated-list-get-id))
+        (PurgeResult aria2c--bin))
+    (revert-buffer))
 
 (defun aria2-move-up-in-list (arg)
     "Move item one row up, with prefix move to beginning of list."
@@ -205,11 +200,11 @@ With prefix remove all applicable downloads."
     (GidPosition aria2c--bin (tabulated-list-get-id) (if (equal nil arg) 1 0) (if (equal nil arg) "POS_CUR" "POS_END"))
     (revert-buffer))
 
-(defun aria2-terminate ()
+(defun aria2-terminate (arg)
     "Stop aria2c process and kill buffers."
-    (interactive)
-    (when (y-or-n-p "Are you sure yo want to terminate aria2 process? ")
-        (Shutdown! aria2c--bin)
+    (interactive "P")
+    (when (y-or-n-p (format "Are you sure yo want to terminate aria2c (pid:%s) process? " (or (oref aria2c--bin pid) "?")))
+        (Shutdown! aria2c--bin arg)
         (kill-buffer aria2-list-buffer-name)
         (aria2--stop-timer)))
 
@@ -284,11 +279,14 @@ With prefix remove all applicable downloads."
 (defun aria2-maybe-do-stuff-on-emacs-exit ()
     "Hook ran when quitting emacs."
     (when (and aria2c--bin (Running? aria2c--bin))
+        (SaveSession aria2c--bin)
         (Save aria2c--bin)
         (when aria2c-kill-process-on-emacs-exit (Shutdown! aria2c--bin t))))
 
-(add-hook 'aria2-mode-hook #'(lambda () (and (not (memq #'aria2-maybe-do-stuff-on-emacs-exit kill-emacs-hook)) (add-hook 'kill-emacs-hook #'aria2-maybe-do-stuff-on-emacs-exit))))
-(add-hook 'aria2-mode-hook #'(lambda () (hl-line-mode 1)))
+(add-hook 'aria2-mode-hook #'(lambda () (unless (memq #'aria2-maybe-do-stuff-on-emacs-exit kill-emacs-hook)
+                                            (add-hook 'kill-emacs-hook #'aria2-maybe-do-stuff-on-emacs-exit))))
+(unless (memq #'hl-line-mode aria2-mode-hook)
+    (add-hook 'aria2-mode-hook #'hl-line-mode))
 
 (define-derived-mode aria2-mode tabulated-list-mode "Aria2"
     "Mode for controlling aria2 downloader.
@@ -296,12 +294,7 @@ With prefix remove all applicable downloads."
     :group 'aria2
     (unless (file-executable-p aria2c-executable)
         (signal 'aria2-err-no-executable nil))
-    (unless aria2c--bin
-        (condition-case nil
-            (setq aria2c--bin (eieio-persistent-read aria2c--bin-file aria2c-exe))
-            (error (setq aria2c--bin (make-instance aria2c-exe
-                                       "aria2c-exe"
-                                       :file aria2c--bin-file)))))
+    (Load aria2c--bin)
     (setq-local tabulated-list-format aria2--list-format)
     (setq-local mode-line-format aria2-mode-line-format)
     (setq-local tabulated-list-entries #'aria2--list-entries)
@@ -315,7 +308,7 @@ With prefix remove all applicable downloads."
     "Display aria2 downloads list.  Enable `aria2-mode' to controll the process."
     (interactive)
     (with-current-buffer aria2-list-buffer-name
-        (aria2-mode))
+        (aria2-mode 1))
     (message
         (substitute-command-keys
             "Type \\<aria2-mode-map>\\[quit-window] to quit, \\[aria2-terminate] to kill aria, \\[describe-mode] for help")))

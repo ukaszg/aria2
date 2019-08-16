@@ -81,13 +81,6 @@ If nil Emacs will reattach itself to the process on entering downloads list."
     :type '(repeat (string :tag "Commandline argument."))
     :group 'aria2c)
 
-(defun aria2c--is-aria-process-p (pid)
-    "Returns t if process identified by PID is aria."
-    (let ((proc-attr (process-attributes pid)))
-        (and
-            (string= "aria2c" (alist-get 'comm proc-attr))
-            (string= (user-real-login-name) (alist-get 'user proc-attr)))))
-
 (defun aria2c--base64-encode-file (path)
     "Return PATH contents as base64-encoded string."
     (unless (file-exists-p path)
@@ -182,23 +175,54 @@ If nil Emacs will reattach itself to the process on entering downloads list."
             :docstring "PID of the aria2c process, or -1 if process isn't running."))
     :docstring "This takes care of starting/stopping aria2c process and provides methods for each remote command.")
 
+(defun aria2c--is-aria-process-p (pid)
+    "Returns t if process identified by PID is aria."
+    (let ((proc-attr (process-attributes pid)))
+        (and
+            (string= "aria2c" (alist-get 'comm proc-attr))
+            (string= (user-real-login-name) (alist-get 'user proc-attr)))))
+
+(defsubst aria2c-find-pid () (car (cl-remove-if-not #'aria2c--is-aria-process-p (list-system-processes))))
+
+(defvar aria2c--bin nil "aria2c process instance.")
+
+(defconst aria2c--bin-file
+    (expand-file-name "aria2c-controller.eieio" user-emacs-directory)
+    "File used to persist controller status between Emacs restarts.")
+
 (defmethod Running? ((this aria2c-exe))
-    "Returns status of aria2c process."
+    "Returns status of managed (we remember the PID) aria2c process."
     (with-slots (pid) this
-        (when (and (< 0 pid)
-                  (aria2c--is-aria-process-p pid))
-            t)))
+        (and (< 0 pid) (aria2c--is-aria-process-p pid))))
+
+(defmethod Save ((this aria2c-exe))
+    "Persist controller settings."
+    (if (Running? this)
+        (eieio-persistent-save this aria2c--bin-file)
+        (message "%s is not running." aria2c-executable)))
+
+(defmethod Load ((this aria2c-exe))
+    "Restore controller settings.  "
+    (if (and (not (Running? this))
+            (file-readable-p aria2c--bin-file))
+        (setq aria2c--bin
+            (condition-case nil
+                (eieio-persistent-read aria2c--bin-file aria2c-exe)
+                (error (make-instance aria2c-exe "aria2c-exe"
+                           :pid (or (aria2c-find-pid) -1)
+                           :file aria2c--bin-file))))
+        (message "%s is running." aria2c-executable)))
 
 (defmethod Start ((this aria2c-exe))
-    "Starts aria2c process, unless already running."
+    "Starts aria2c process."
     (unless (Running? this)
         (let ((options (aria2c-start-cmd)))
-            (when aria2--debug (message "Starting process: %s %s" aria2c-executable (string-join options " ")))
-            (apply 'start-process aria2c-executable nil aria2c-executable options)
+            (when aria2--debug
+                (message "Starting process: %s %s" aria2c-executable (string-join options " ")))
+            (apply #'start-process aria2c-executable nil aria2c-executable options)
             (sleep-for 1)
             ;; aria2 in daemon mode forks to the background, so we search system-processes
-            (oset this pid (or (car (cl-remove-if-not #'aria2c--is-aria-process-p (list-system-processes)))
-                               -1))
+            (oset this pid (or (aria2c-find-pid) -1))
             (unless (Running? this)
                 (signal 'aria2c-err-failed-to-start (concat aria2c-executable " " (string-join options " ")))))))
 
@@ -211,7 +235,8 @@ If nil Emacs will reattach itself to the process on entering downloads list."
                                    (list
                                        (cons "jsonrpc" 2.0)
                                        (cons "id" (let ((id (1+ (oref this request-id))))
-                                                      (oset this request-id (if (equal id most-positive-fixnum) 0 id))
+                                                      (setq id (if (equal id most-positive-fixnum) 0 id))
+                                                      (oset this request-id id)
                                                       id))
                                        (cons "method"  method)
                                        (cons "params" (vconcat
@@ -221,8 +246,8 @@ If nil Emacs will reattach itself to the process on entering downloads list."
              url-history-track
              json-response)
         (when aria2--debug (message "SEND: %s" url-request-data))
-
-        (with-current-buffer (url-retrieve-synchronously (format "http://localhost:%d/jsonrpc" aria2c-rcp-listen-port) t)
+        (with-current-buffer
+            (url-retrieve-synchronously (format "http://localhost:%d/jsonrpc" aria2c-rcp-listen-port) t)
             ;; expect unicode response
             (set-buffer-multibyte t)
             ;; read last line, where json response is
@@ -241,16 +266,16 @@ When sending magnet link, URLS must have only one element."
 
 (defmethod Torrent ((this aria2c-exe) path)
     "Add PATH pointing at a torrent file to download list."
-    (unless (file-exists-p path)
-        (signal 'aria2c-err-file-doesnt-exist '(path)))
+    (unless (file-exists-p (setq path (expand-file-name (string-trim path))))
+        (signal 'aria2c-err-file-doesnt-exist `(,path)))
     (unless (string-match-p "\\.torrent$" path)
         (signal 'aria2c-err-not-a-torrent-file nil))
     (Post this "aria2.addTorrent" (aria2c--base64-encode-file path)))
 
 (defmethod Metalink ((this aria2c-exe) path)
     "Add local .metalink PATH to download list."
-    (unless (file-exists-p path)
-        (signal 'aria2c-err-file-doesnt-exist '(path)))
+    (unless (file-exists-p (setq path (expand-file-name (string-trim path))))
+        (signal 'aria2c-err-file-doesnt-exist `(,path)))
     (unless (string-match-p "\\.meta\\(?:4\\|link\\)$" path)
         (signal 'aria2c-err-not-a-metalink-file nil))
     (Post this "aria2.addMetalink" (aria2c--base64-encode-file path)))
@@ -259,6 +284,7 @@ When sending magnet link, URLS must have only one element."
     "Shut down aria2c process.  If FORCE don't wait for unregistering torrents."
     (when (Running? this)
         (Post this (if force "aria2.forceShutdown" "aria2.shutdown"))
+        (sleep-for 1)
         (oset this pid -1)))
 
 (defmethod Cancel ((this aria2c-exe) gid &optional force)
@@ -267,11 +293,11 @@ When sending magnet link, URLS must have only one element."
 
 (defmethod Pause ((this aria2c-exe) gid &optional force)
     "Pause download identified by GID or all if t. If FORCE don't unregister download at bittorrent tracker."
-    (Post this (concat (if force "aria2.forcePause" "aria2.pause") (if (equal t gid) "All" "")) (when (equal t gid) gid)))
+    (Post this (concat (if force "aria2.forcePause" "aria2.pause") (if (eq t gid) "All" "")) (when (eq t gid) gid)))
 
 (defmethod Unpause ((this aria2c-exe) gid)
     "Unpause download identified by GID or all if t."
-    (if (equal t gid)
+    (if (eq t gid)
         (Post this "aria2.unpause" gid)
         (Post this "aria2.unpauseAll")))
 
@@ -351,28 +377,6 @@ Returns a pair of numbers denoting amount of files deleted and files inserted."
     "Saves the current session to a `aria2c-session-file' file."
     (Post this "aria2.saveSession"))
 
-(defvar aria2c--bin nil "aria2c process instance.")
-
-(defconst aria2c--bin-file
-    (expand-file-name "aria2c-controller.eieio" user-emacs-directory)
-    "File used to persist controller status between Emacs restarts.")
-
-(defmethod Save ((this aria2c-exe))
-    "Persist controller settings."
-    (if (Running? this)
-        (eieio-persistent-save this aria2c--bin-file)
-        (message "%s is not running." aria2c-executable)))
-
-(defmethod Load ((this aria2c-exe))
-    "Restore controller settings."
-    (if (and (not (Running? this))
-            (file-readable-p aria2c--bin-file))
-        (condition-case nil
-            (setq aria2c--bin (eieio-persistent-read aria2c--bin-file aria2c-exe))
-            (error (setq aria2c--bin (make-instance aria2c-exe
-                                         "aria2c-exe"
-                                         :file aria2c--bin-file))))
-        (message "%s is running." aria2c-executable)))
 
 (provide 'aria2-exe)
 
