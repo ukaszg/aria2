@@ -82,16 +82,14 @@
                       (when (timerp aria2--refresh-timer) (cancel-timer aria2--refresh-timer))
                       (setq
                           aria2--refresh-timer (run-at-time t refresh #'aria2--refresh)
-                          aria2--current-buffer-refresh-speed speed)))
+                          aria2--current-buffer-refresh-speed speed))
+                  (speed-is (speed) (eq aria2--current-buffer-refresh-speed speed)))
             (cond
                 ((eq buf (window-buffer (selected-window))) ; when list has focus
-                    (unless (eq aria2--current-buffer-refresh-speed :fast)
-                        (retimer aria2-refresh-fast :fast)))
+                    (unless (speed-is :fast) (retimer aria2-refresh-fast :fast)))
                 ((get-buffer-window buf) ; list visible but without focus
-                    (unless (eq aria2--current-buffer-refresh-speed :normal)
-                        (retimer aria2-refresh-normal :normal)))
-                (t (unless (eq aria2--current-buffer-refresh-speed :slow) ; list is in the background
-                       (retimer aria2-refresh-slow :slow)))))))
+                    (unless (speed-is :normal) (retimer aria2-refresh-normal :normal)))
+                (t (unless speed-is :slow) (retimer aria2-refresh-slow :slow))))))
 
 (provide 'aria2-refresh)
 
