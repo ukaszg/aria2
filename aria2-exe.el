@@ -30,6 +30,9 @@
 
 ;;; Code:
 
+(defvar aria2--debug nil
+    "Should json commands and replies be printed.")
+
 (require 'eieio-base)
 (require 'json)
 (require 'url)
@@ -45,8 +48,6 @@ If nil Emacs will reattach itself to the process on entering downloads list."
     "Full path to aria2 binary."
     :type 'file
     :group 'aria2)
-
-(unless aria2-executable (signal 'aria2-err-no-executable nil))
 
 (defcustom aria2-session-file (expand-file-name "aria2.session" user-emacs-directory)
     "Name of session file.  Will be used with \"--save-session\" and \"--input-file\" options."
@@ -147,13 +148,6 @@ If nil Emacs will reattach itself to the process on entering downloads list."
                  ,(when (file-exists-p aria2-session-file)
                       (format "--input-file=%s" aria2-session-file))))))
 
-;;;###autoload
-(defun aria2-print-daemon-commandline ()
-    "Prints full commandline for aria2."
-    (interactive)
-    (let ((options (aria2-start-cmd)))
-        (message "# %s %s" aria2-executable (string-join options " "))))
-
 ;;; Aria2 process controller starts here.
 
 (defclass aria2-exe (eieio-persistent)
@@ -169,7 +163,7 @@ If nil Emacs will reattach itself to the process on entering downloads list."
             :initform -1
             :type integer
             :docstring "PID of the aria2 process, or -1 if process isn't running."))
-    :docstring "This takes care of starting/stopping aria2 process and provides methods for each remote command.")
+    :docstring "This takes care of starting/stopping aria2c process and provides methods for each remote command.")
 
 (defun aria2--is-aria-process-p (pid)
     "Returns t if process identified by PID is aria."
@@ -180,7 +174,7 @@ If nil Emacs will reattach itself to the process on entering downloads list."
 
 (defsubst aria2-find-pid () (car (cl-remove-if-not #'aria2--is-aria-process-p (list-system-processes))))
 
-(defvar aria2--bin nil "aria2 process instance.")
+(defvar aria2--bin nil "aria2c process instance.")
 
 (defconst aria2--bin-file
     (expand-file-name "aria2-controller.eieio" user-emacs-directory)

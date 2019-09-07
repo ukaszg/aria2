@@ -25,175 +25,123 @@
 ;; free or for profit.
 ;; These rights, on this notice, rely.
 
-
 ;;; Commentary:
 
 ;;; Code:
 
 (defgroup aria2 nil
-    "An interface for aria2c command."
+    "An interface for aria2 command."
     :group 'external
     :group 'execute
     :prefix "aria2-")
-
-(defvar aria2--debug nil
-    "Should json commands and replies be printed.")
 
 (defcustom aria2-mode-hook nil
     "Hook ran afer enabling `aria2-mode'."
     :type 'hook
     :group 'aria2)
 
-(require 'tabulated-list)
-(require 'aria2-exe)
-(require 'aria2-refresh)
+(defcustom aria2-add-evil-quirks (not (string-empty-p (locate-library "evil")))
+    "If t adds aria2-mode to emacs states, and binds \C-w."
+    :type 'boolean
+    :group 'aria2)
+
 (require 'aria2-faces)
 (require 'aria2-tview)
-
-;; Interactive commands start here
+(require 'aria2-refresh)
+(require 'aria2-exe)
+(require 'aria2-dialog)
 
 (defsubst aria2--is-paused-p ()
     (string= "paused" (car (elt (tabulated-list-get-entry) 1))))
 
+(defun aria2-maybe-do-stuff-on-emacs-exit ()
+    "Hook ran when quitting emacs."
+    (when (and aria2--bin (Running? aria2--bin))
+        (SaveSession aria2--bin)
+        (Save aria2--bin)
+        (when aria2-kill-process-on-emacs-exit
+            (message "Stopping: %s" aria2-executable)
+            (Shutdown! aria2--bin t))))
+
+(defun aria2-maybe-add-evil-quirks ()
+    "Keep aria2-mode in EMACS state since we already define j/k movement and add C-w * commands."
+    (when aria2-add-evil-quirks
+        (with-eval-after-load 'evil-states
+            (add-to-list 'evil-emacs-state-modes 'aria2-mode)
+            (add-to-list 'evil-emacs-state-modes 'aria2-dialog-mode))
+        (with-eval-after-load 'evil-maps
+            (define-key aria2-mode-map "\C-w" 'evil-window-map))))
+
+(add-hook 'aria2-mode-hook #'aria2-maybe-add-evil-quirks)
+
+;; Interactive commands start here
+
+;;;###autoload
+(defun aria2-print-daemon-commandline ()
+    "Prints full commandline for aria2."
+    (interactive)
+    (let ((options (aria2-start-cmd)))
+        (message "# %s %s" aria2-executable (string-join options " "))))
+
 (defun aria2-pause (all)
     "Pause download."
     (interactive "P")
-    (Pause aria2c--bin (tabulated-list-get-id) all)
-    (message "Pausing download. This may take a moment..."))
+    (when-let ((gid (tabulated-list-get-id)))
+        (Pause aria2--bin gid all)
+        (message "Pausing download. This may take a moment...")
+        (aria2--refresh)))
 
 (defun aria2-resume (all)
     "Resume paused download."
     (interactive "P")
-    (Unpause aria2c--bin (tabulated-list-get-id) all)
-    (revert-buffer))
+    (when-let ((gid (tabulated-list-get-id)))
+        (Unpause aria2--bin gid all)
+        (aria2--refresh)))
 
 (defun aria2-toggle-pause (all)
     "Toggle 'paused' status for download."
     (interactive "P")
     (if (aria2--is-paused-p)
         (aria2-resume all)
-        (aria2-pause all)))
-
-(defconst aria2-supported-file-extension-regexp "\\.\\(?:meta\\(?:4\\|link\\)\\|torrent\\)$"
-    "Regexp matching .torrent .meta4 and .metalink files.")
-
-(defun aria2--supported-file-type-p (f)
-    "Supported file predicate. Also allows directories to enable path navigation."
-    (or (file-directory-p f)
-        (string-match-p aria2-supported-file-extension-regexp f)))
-
-;;;###autoload
-(defun aria2-add-file (arg)
-    "Prompt for a file and add it. Supports .torrent .meta4 and .metalink files."
-    (interactive "P")
-    (let ((chosen-file
-              (expand-file-name
-                  (read-file-name
-                      "Choose .meta4, .metalink or .torrent file: "
-                      default-directory nil nil nil 'aria2--supported-file-type-p))))
-        (if (or (string-blank-p chosen-file)
-                (not (file-exists-p chosen-file)))
-            (message "No file selected.")
-            (if (string-match-p "\\.torrent$" chosen-file)
-                (Torrent aria2c--bin chosen-file)
-                (Metalink aria2c--bin chosen-file))))
-    (with-current-buffer aria2-list-buffer-name
-        (revert-buffer)))
-
-(defvar aria2-dialog-map
-    (let ((map (make-sparse-keymap)))
-        (set-keymap-parent map widget-keymap)
-        (define-key map [mouse-1] 'widget-button-click)
-        map))
-
-(defvar aria2--url-list-widget nil)
-
-(defconst aria2-supported-url-protocols-regexp "\\(?:ftp://\\|http\\(?:s?://\\)\\|magnet:\\)"
-    "Regexp matching frp, http, https and magnet urls.")
-
-(defconst aria2-url-list-buffer-name  "*aria2: Add http/https/ftp/magnet url(s)*"
-    "Name of a buffer for inputting url's to download.")
-
-;;;###autoload
-(define-derived-mode aria2-dialog-mode fundamental-mode "Add urls"
-    "Major mode for adding download urls.")
-
-;;;###autoload
-(defun aria2-add-uris (arg)
-    "Display a form for inputting a list of http/https/ftp/magnet URLs."
-    (interactive "P")
-    (switch-to-buffer (get-buffer-create aria2-url-list-buffer-name))
-    (kill-all-local-variables)
-    (aria2-dialog-mode)
-    (let ((inhibit-read-only t)) (erase-buffer))
-    (remove-overlays)
-    (widget-insert "Please input urls to download.\n\n")
-    (widget-insert "Non \"magnet:\" urls must be mirrors pointing to the same file.\n\n")
-    (setq aria2--url-list-widget
-        (widget-create 'editable-list
-            :entry-format "%i %d %v"
-            :value '("")
-            '(editable-field
-                 :valid-regexp aria2-supported-url-protocols-regexp
-                 :error "Url does not match supported type."
-                 :value "")))
-    (widget-insert "\n\n")
-    (widget-create 'push-button
-        :notify (lambda (&rest ignore)
-                    (setq aria2--url-list-widget nil)
-                    (kill-buffer aria2-url-list-buffer-name)
-                    (switch-to-buffer aria2-list-buffer-name))
-        "Cancel")
-    (widget-insert "  ")
-    (widget-create 'push-button
-        :notify (lambda (&rest ignore)
-                    (Uri aria2c--bin (widget-value aria2--url-list-widget))
-                    (setq aria2--url-list-widget nil)
-                    (kill-buffer aria2-url-list-buffer-name)
-                    (switch-to-buffer aria2-list-buffer-name)
-                    (revert-buffer))
-        "Download")
-    (widget-insert "\n")
-    (use-local-map aria2-dialog-map)
-    (widget-setup)
-    (goto-char (point-min))
-    (widget-forward 3))
+        (aria2-pause all))
+    (aria2--refresh))
 
 (defun aria2-remove-download ()
     "Set download status to 'removed'."
     (interactive)
     (let ((gid (tabulated-list-get-id)))
         (when (and gid (y-or-n-p "Really remove download? "))
-            (RemoveResult aria2c--bin gid)
+            (RemoveResult aria2--bin gid)
             (revert-buffer))))
 
 (defun aria2-clean-removed-download ()
     "Clean download with 'removed/completed/error' status.
 With prefix remove all applicable downloads."
     (interactive)
-    (PurgeResult aria2c--bin)
-    (with-current-buffer aria2-list-buffer-name
-        (revert-buffer)))
+    (PurgeResult aria2--bin)
+    (aria2--refresh))
 
 (defun aria2-move-up-in-list (arg)
     "Move item one row up, with prefix move to beginning of list."
     (interactive "P")
-    (GidPosition aria2c--bin (tabulated-list-get-id) (if (equal nil arg) -1 0) (if (equal nil arg) "POS_CUR" "POS_SET"))
-    (revert-buffer))
+    (when-let ((gid (tabulated-list-get-id)))
+        (GidPosition aria2--bin gid (if (equal nil arg) -1 0) (if (equal nil arg) "POS_CUR" "POS_SET"))
+        (revert-buffer)))
 
 (defun aria2-move-down-in-list (arg)
     "Move item one row down, with prefix move to end of list."
     (interactive "P")
-    (GidPosition aria2c--bin (tabulated-list-get-id) (if (equal nil arg) 1 0) (if (equal nil arg) "POS_CUR" "POS_END"))
-    (revert-buffer))
+    (when-let ((gid (tabulated-list-get-id)))
+        (GidPosition aria2--bin gid (if (equal nil arg) 1 0) (if (equal nil arg) "POS_CUR" "POS_END"))
+        (revert-buffer)))
 
 (defun aria2-terminate (arg)
-    "Stop aria2c process and kill buffers."
+    "Stop aria2 process and kill buffers."
     (interactive "P")
-    (when (y-or-n-p (format "Are you sure yo want to terminate aria2c (pid:%s) process? " (or (oref aria2c--bin pid) "?")))
-        (Shutdown! aria2c--bin arg)
+    (when (y-or-n-p (format "Are you sure yo want to terminate aria2 (pid:%s) process? " (or (oref aria2--bin pid) "?")))
+        (Shutdown! aria2--bin arg)
         (kill-buffer aria2-list-buffer-name)
-        (aria2--stop-timer)
+        (aria2--stop-timers)
         (remove-hook 'kill-emacs-hook #'aria2-maybe-do-stuff-on-emacs-exit)))
 
 ;; Mode line format starts here
@@ -224,14 +172,14 @@ With prefix remove all applicable downloads."
         " "
         (propertize
             (concat "[" (propertize "q" 'face 'aria2-modeline-key-face) "]:quit window")
-            'local-map (make-mode-line-mouse-map 'down-mouse-1 #'aria2-quit)
+            'local-map (make-mode-line-mouse-map 'down-mouse-1 #'quit-window)
             'mouse-face 'aria2-modeline-mouse-face)
         " "
         (propertize
             (concat "[" (propertize "Q" 'face 'aria2-modeline-key-face) "]:kill aria2")
             'local-map (make-mode-line-mouse-map 'down-mouse-1 #'aria2-terminate)
             'mouse-face 'aria2-modeline-mouse-face))
-    "Custom mode-line for use with `aria2-mode'.")
+    "Custom mode-line-format for use with `aria2-mode'.")
 
 ;;; Major mode starts here
 
@@ -263,46 +211,19 @@ With prefix remove all applicable downloads."
         map)
     "Keymap for `aria2-mode'.")
 
-
-(defcustom aria2-add-evil-quirks (not (string-empty-p (locate-library "evil")))
-    "If t adds aria2-mode to emacs states, and binds \C-w.")
-
-;;;###autoload
-(defun aria2-maybe-add-evil-quirks ()
-    "Keep aria2-mode in EMACS state, as we already define j/k movement and add C-w * commands."
-    (when aria2-add-evil-quirks
-        (with-eval-after-load 'evil-states
-            (add-to-list 'evil-emacs-state-modes 'aria2-mode)
-            (add-to-list 'evil-emacs-state-modes 'aria2-dialog-mode))
-        (with-eval-after-load 'evil-maps
-            (define-key aria2-mode-map "\C-w" 'evil-window-map))))
-
-(add-hook 'aria2-mode-hook #'aria2-maybe-add-evil-quirks)
-
-;;;###autoload
-(defun aria2-maybe-do-stuff-on-emacs-exit ()
-    "Hook ran when quitting emacs."
-    (when (and aria2c--bin (Running? aria2c--bin))
-        (SaveSession aria2c--bin)
-        (Save aria2c--bin)
-        (when aria2c-kill-process-on-emacs-exit
-            (message "Stopping: %s" aria2c-executable)
-            (Shutdown! aria2c--bin t))))
-
-;;;###autoload
 (define-derived-mode aria2-mode tabulated-list-mode "Aria2"
     "Mode for controlling aria2 downloader.
 \\{aria2-mode-map}"
     :group 'aria2
-    (unless (file-executable-p aria2c-executable)
+    (unless (file-executable-p aria2-executable)
         (signal 'aria2-err-no-executable nil))
-    (unless aria2c--bin
+    (unless aria2--bin
         (condition-case nil
-            (setq aria2c--bin (eieio-persistent-read aria2c--bin-file aria2c-exe))
-            (error (setq aria2c--bin (make-instance aria2c-exe
-                                         "aria2c-exe"
-                                         :pid (or (aria2c-find-pid) -1)
-                                         :file aria2c--bin-file)))))
+            (setq aria2--bin (eieio-persistent-read aria2--bin-file 'aria2-exe))
+            (error (setq aria2--bin (make-instance 'aria2-exe
+                                         "aria2-exe"
+                                         :pid (or (aria2-find-pid) -1)
+                                         :file aria2--bin-file)))))
     (add-hook 'kill-emacs-hook #'aria2-maybe-do-stuff-on-emacs-exit)
     (setq-local mode-line-format aria2-mode-line-format)
     (setq tabulated-list-format aria2--list-format)
@@ -311,7 +232,6 @@ With prefix remove all applicable downloads."
     (hl-line-mode 1)
     (tabulated-list-print)
     (aria2--start-timers))
-
 
 ;;;###autoload
 (defun aria2-downloads-list ()

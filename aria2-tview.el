@@ -50,6 +50,8 @@
         "uploadSpeed" "files" "dir" "bittorrent" "errorCode"]
     "Default list of keys for use in aria2.tell* calls.")
 
+(require 'tabulated-list)
+
 (defsubst aria2--list-entries-File (e)
     (let ((bt (alist-get 'bittorrent e)))
         (or (and bt (alist-get 'name (alist-get 'info bt)))
@@ -96,16 +98,16 @@
 
 (defsubst aria2--list-entries-Err (e)
     (let ((err (alist-get 'errorCode e)))
-        (or (and err (aria2c--decode-error err))
+        (or (and err (aria2--decode-error err))
             " - ")))
 
 (defun aria2--list-entries ()
     "Return entries to be displayed in downloads list."
     (let (entries
              (info (append
-                       (Active  aria2c--bin aria2--tell-keys)
-                       (Waiting aria2c--bin nil nil aria2--tell-keys)
-                       (Stopped aria2c--bin nil nil aria2--tell-keys)
+                       (Active  aria2--bin aria2--tell-keys)
+                       (Waiting aria2--bin nil nil aria2--tell-keys)
+                       (Stopped aria2--bin nil nil aria2--tell-keys)
                        nil)))
         (dolist (e info entries)
             (push (list
