@@ -37,11 +37,13 @@
 
 (defconst aria2--list-format
     [
-        ("File"     40 t)   ("Status"    7 t)
-        ("Type"     13 t)   ("Done"      4 t)
-        ("Download" 12 t    (:right-align t))
-        ("Upload"   12 t    (:right-align t))
-        ("Size"     10 nil  (:right-align t))
+        ("File"     40 t)
+        ("Status"    7 t)
+        ("Type"     13 t)
+        ("Done"      4 t)
+        ("Download" 12 t   (:right-align t))
+        ("Upload"   12 t   (:right-align t))
+        ("Size"     10 nil (:right-align t))
         ("Error"     0 nil)]
     "Format for downloads list columns.")
 
@@ -52,36 +54,43 @@
 
 (require 'tabulated-list)
 
-(defsubst aria2--list-entries-File (e)
+(defun aria2--list-entries-File (e)
+    (declare (pure t) (side-effect-free t))
     (let ((bt (alist-get 'bittorrent e)))
         (or (and bt (alist-get 'name (alist-get 'info bt)))
             (let ((uris (alist-get 'uris (elt (alist-get 'files e) 0))))
                 (and (< 0 (length uris)) (file-name-nondirectory (alist-get 'uri (elt uris 0)))))
             "unknown")))
 
-(defsubst aria2--list-entries-Status (e)
+(defun aria2--list-entries-Status (e)
+    (declare (pure t) (side-effect-free t))
     (alist-get 'status e))
 
-(defsubst aria2--list-entries-Type (e)
+(defun aria2--list-entries-Type (e)
+    (declare (pure t) (side-effect-free t))
     (or (and (alist-get 'bittorrent e) "bittorrent")
         (let ((uris (alist-get 'uris (elt (alist-get 'files e) 0))))
             (and (< 0 (length uris)) (car-safe (split-string (alist-get 'uri (elt uris 0)) ":"))))
         "unknown"))
 
-(defsubst aria2--list-entries-Done (e)
+(defun aria2--list-entries-Done (e)
+    (declare (pure t) (side-effect-free t))
     (let ((total (float (string-to-number (alist-get 'totalLength e))))
              (completed (float (string-to-number (alist-get 'completedLength e)))))
         (if (>= 0 total)
             "-"
             (format "%d%%" (* 100.0 (/ completed total))))))
 
-(defsubst aria2--list-entries-Download (e)
+(defun aria2--list-entries-Download (e)
+    (declare (pure t) (side-effect-free t))
     (format "%.2f kB" (/ (string-to-number (alist-get 'downloadSpeed e)) 1024)))
 
-(defsubst aria2--list-entries-Upload (e)
+(defun aria2--list-entries-Upload (e)
+    (declare (pure t) (side-effect-free t))
     (format "%.2f kB" (/ (string-to-number (alist-get 'uploadSpeed e)) 1024)))
 
-(defsubst aria2--list-entries-Size (e)
+(defun aria2--list-entries-Size (e)
+    (declare (pure t) (side-effect-free t))
     (let ((size (string-to-number (alist-get 'totalLength e))))
         (if (< size 1024)
             (format "%.2f B" size)
@@ -96,7 +105,8 @@
                         (format "%.2f GB" size)
                         (format "%2.f TB" (/ size 1024))))))))
 
-(defsubst aria2--list-entries-Err (e)
+(defun aria2--list-entries-Err (e)
+    (declare (pure t) (side-effect-free t))
     (let ((err (alist-get 'errorCode e)))
         (or (and err (aria2--decode-error err))
             " - ")))
