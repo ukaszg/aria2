@@ -44,21 +44,6 @@
     :type 'hook
     :group 'aria2)
 
-(defcustom aria2-add-evil-quirks (not (string-empty-p (locate-library "evil")))
-    "If t adds aria2-mode to emacs states, and binds \C-w.")
-
-;;;###autoload
-(defun aria2-maybe-add-evil-quirks ()
-    "Keep aria2-mode in EMACS state, as we already define j/k movement and add C-w * commands."
-    (when aria2-add-evil-quirks
-        (with-eval-after-load 'evil-states
-            (add-to-list 'evil-emacs-state-modes 'aria2-mode)
-            (add-to-list 'evil-emacs-state-modes 'aria2-dialog-mode))
-        (with-eval-after-load 'evil-maps
-            (define-key aria2-mode-map "\C-w" 'evil-window-map))))
-
-(add-hook 'aria2-mode-hook #'aria2-maybe-add-evil-quirks)
-
 (require 'tabulated-list)
 (require 'aria2-exe)
 (require 'aria2-refresh)
@@ -112,7 +97,8 @@
             (if (string-match-p "\\.torrent$" chosen-file)
                 (Torrent aria2c--bin chosen-file)
                 (Metalink aria2c--bin chosen-file))))
-    (revert-buffer))
+    (with-current-buffer aria2-list-buffer-name
+        (revert-buffer)))
 
 (defvar aria2-dialog-map
     (let ((map (make-sparse-keymap)))
@@ -133,9 +119,9 @@
     "Major mode for adding download urls.")
 
 ;;;###autoload
-(defun aria2-add-uris ()
+(defun aria2-add-uris (arg)
     "Display a form for inputting a list of http/https/ftp/magnet URLs."
-    (interactive)
+    (interactive "P")
     (switch-to-buffer (get-buffer-create aria2-url-list-buffer-name))
     (kill-all-local-variables)
     (aria2-dialog-mode)
@@ -155,16 +141,17 @@
     (widget-create 'push-button
         :notify (lambda (&rest ignore)
                     (setq aria2--url-list-widget nil)
-                    (switch-to-buffer aria2-list-buffer-name)
-                    (kill-buffer aria2-url-list-buffer-name))
+                    (kill-buffer aria2-url-list-buffer-name)
+                    (switch-to-buffer aria2-list-buffer-name))
         "Cancel")
     (widget-insert "  ")
     (widget-create 'push-button
         :notify (lambda (&rest ignore)
                     (Uri aria2c--bin (widget-value aria2--url-list-widget))
                     (setq aria2--url-list-widget nil)
+                    (kill-buffer aria2-url-list-buffer-name)
                     (switch-to-buffer aria2-list-buffer-name)
-                    (kill-buffer aria2-url-list-buffer-name))
+                    (revert-buffer))
         "Download")
     (widget-insert "\n")
     (use-local-map aria2-dialog-map)
@@ -172,21 +159,21 @@
     (goto-char (point-min))
     (widget-forward 3))
 
-(defun aria2-remove-download (arg)
+(defun aria2-remove-download ()
     "Set download status to 'removed'."
-    (interactive "P")
-    (when (y-or-n-p "Really remove download? ")
-        (RemoveResult aria2c--bin (tabulated-list-get-id) (not (eq nil arg)))
-        (tabulated-list-delete-entry)))
+    (interactive)
+    (let ((gid (tabulated-list-get-id)))
+        (when (and gid (y-or-n-p "Really remove download? "))
+            (RemoveResult aria2c--bin gid)
+            (revert-buffer))))
 
-(defun aria2-clean-removed-download (arg)
+(defun aria2-clean-removed-download ()
     "Clean download with 'removed/completed/error' status.
 With prefix remove all applicable downloads."
-    (interactive "P")
-    (if (eq nil arg)
-        (RemoveResult aria2c--bin (tabulated-list-get-id))
-        (PurgeResult aria2c--bin))
-    (revert-buffer))
+    (interactive)
+    (PurgeResult aria2c--bin)
+    (with-current-buffer aria2-list-buffer-name
+        (revert-buffer)))
 
 (defun aria2-move-up-in-list (arg)
     "Move item one row up, with prefix move to beginning of list."
@@ -206,7 +193,8 @@ With prefix remove all applicable downloads."
     (when (y-or-n-p (format "Are you sure yo want to terminate aria2c (pid:%s) process? " (or (oref aria2c--bin pid) "?")))
         (Shutdown! aria2c--bin arg)
         (kill-buffer aria2-list-buffer-name)
-        (aria2--stop-timer)))
+        (aria2--stop-timer)
+        (remove-hook 'kill-emacs-hook #'aria2-maybe-do-stuff-on-emacs-exit)))
 
 ;; Mode line format starts here
 
@@ -216,32 +204,32 @@ With prefix remove all applicable downloads."
         " "
         (propertize
             (concat "[" (propertize "f" 'face 'aria2-modeline-key-face) "]:add file")
-            'local-map (make-mode-line-mouse-map 'mouse-1 'aria2-add-file)
+            'local-map (make-mode-line-mouse-map 'down-mouse-1 #'aria2-add-file)
             'mouse-face 'aria2-modeline-mouse-face)
         " "
         (propertize
             (concat "[" (propertize "u" 'face 'aria2-modeline-key-face) "]:add url")
-            'local-map (make-mode-line-mouse-map 'mouse1 'aria2-add-uris)
+            'local-map (make-mode-line-mouse-map 'down-mouse-1 #'aria2-add-uris)
             'mouse-face 'aria2-modeline-mouse-face)
         " "
         (propertize
             (concat "[" (propertize "D" 'face 'aria2-modeline-key-face) "]:remove download")
-            'local-map (make-mode-line-mouse-map 'mouse1 'aria2-remove-download)
+            'local-map (make-mode-line-mouse-map 'down-mouse-1 #'aria2-remove-download)
             'mouse-face 'aria2-modeline-mouse-face)
         " "
         (propertize
             (concat "[" (propertize "C" 'face 'aria2-modeline-key-face) "]:clear finished")
-            'local-map (make-mode-line-mouse-map 'mouse1 'aria2-clean-removed-download)
+            'local-map (make-mode-line-mouse-map 'down-mouse-1 #'aria2-clean-removed-download)
             'mouse-face 'aria2-modeline-mouse-face)
         " "
         (propertize
             (concat "[" (propertize "q" 'face 'aria2-modeline-key-face) "]:quit window")
-            'local-map (make-mode-line-mouse-map 'mouse1 'aria2-quit)
+            'local-map (make-mode-line-mouse-map 'down-mouse-1 #'aria2-quit)
             'mouse-face 'aria2-modeline-mouse-face)
         " "
         (propertize
             (concat "[" (propertize "Q" 'face 'aria2-modeline-key-face) "]:kill aria2")
-            'local-map (make-mode-line-mouse-map 'mouse1 'aria2-terminate)
+            'local-map (make-mode-line-mouse-map 'down-mouse-1 #'aria2-terminate)
             'mouse-face 'aria2-modeline-mouse-face))
     "Custom mode-line for use with `aria2-mode'.")
 
@@ -275,40 +263,62 @@ With prefix remove all applicable downloads."
         map)
     "Keymap for `aria2-mode'.")
 
+
+(defcustom aria2-add-evil-quirks (not (string-empty-p (locate-library "evil")))
+    "If t adds aria2-mode to emacs states, and binds \C-w.")
+
+;;;###autoload
+(defun aria2-maybe-add-evil-quirks ()
+    "Keep aria2-mode in EMACS state, as we already define j/k movement and add C-w * commands."
+    (when aria2-add-evil-quirks
+        (with-eval-after-load 'evil-states
+            (add-to-list 'evil-emacs-state-modes 'aria2-mode)
+            (add-to-list 'evil-emacs-state-modes 'aria2-dialog-mode))
+        (with-eval-after-load 'evil-maps
+            (define-key aria2-mode-map "\C-w" 'evil-window-map))))
+
+(add-hook 'aria2-mode-hook #'aria2-maybe-add-evil-quirks)
+
 ;;;###autoload
 (defun aria2-maybe-do-stuff-on-emacs-exit ()
     "Hook ran when quitting emacs."
     (when (and aria2c--bin (Running? aria2c--bin))
         (SaveSession aria2c--bin)
         (Save aria2c--bin)
-        (when aria2c-kill-process-on-emacs-exit (Shutdown! aria2c--bin t))))
+        (when aria2c-kill-process-on-emacs-exit
+            (message "Stopping: %s" aria2c-executable)
+            (Shutdown! aria2c--bin t))))
 
-(add-hook 'aria2-mode-hook #'(lambda () (unless (memq #'aria2-maybe-do-stuff-on-emacs-exit kill-emacs-hook)
-                                            (add-hook 'kill-emacs-hook #'aria2-maybe-do-stuff-on-emacs-exit))))
-(unless (memq #'hl-line-mode aria2-mode-hook)
-    (add-hook 'aria2-mode-hook #'hl-line-mode))
-
+;;;###autoload
 (define-derived-mode aria2-mode tabulated-list-mode "Aria2"
     "Mode for controlling aria2 downloader.
 \\{aria2-mode-map}"
     :group 'aria2
     (unless (file-executable-p aria2c-executable)
         (signal 'aria2-err-no-executable nil))
-    (Load aria2c--bin)
-    (setq-local tabulated-list-format aria2--list-format)
+    (unless aria2c--bin
+        (condition-case nil
+            (setq aria2c--bin (eieio-persistent-read aria2c--bin-file aria2c-exe))
+            (error (setq aria2c--bin (make-instance aria2c-exe
+                                         "aria2c-exe"
+                                         :pid (or (aria2c-find-pid) -1)
+                                         :file aria2c--bin-file)))))
+    (add-hook 'kill-emacs-hook #'aria2-maybe-do-stuff-on-emacs-exit)
     (setq-local mode-line-format aria2-mode-line-format)
-    (setq-local tabulated-list-entries #'aria2--list-entries)
+    (setq tabulated-list-format aria2--list-format)
+    (setq tabulated-list-entries #'aria2--list-entries)
     (tabulated-list-init-header)
+    (hl-line-mode 1)
     (tabulated-list-print)
-    (aria2--start-timers)
-    (run-hooks 'aria2-mode-hook))
+    (aria2--start-timers))
+
 
 ;;;###autoload
 (defun aria2-downloads-list ()
     "Display aria2 downloads list.  Enable `aria2-mode' to controll the process."
     (interactive)
-    (with-current-buffer aria2-list-buffer-name
-        (aria2-mode 1))
+    (with-current-buffer (pop-to-buffer aria2-list-buffer-name)
+        (aria2-mode))
     (message
         (substitute-command-keys
             "Type \\<aria2-mode-map>\\[quit-window] to quit, \\[aria2-terminate] to kill aria, \\[describe-mode] for help")))

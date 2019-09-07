@@ -59,38 +59,37 @@
 
 (defun aria2--stop-timers ()
     "Stop all timers."
-    (cancel-timer aria2--master-timer)
-    (cancel-timer aria2--refresh-timer)
+    (when (timerp aria2--master-timer)  (cancel-timer aria2--master-timer))
+    (when (timerp aria2--refresh-timer) (cancel-timer aria2--refresh-timer))
     (setq aria2--refresh-timer nil
         aria2--master-timer nil))
 
 (defun aria2--start-timers ()
     "Start all timers."
-    (setq aria2--master-timer (run-at-time t 5 #'aria2--manage-refresh-timer)))
+    (unless (timerp aria2--master-timer)
+        (setq aria2--master-timer (run-at-time t 5 #'aria2--manage-refresh-timer))))
 
 (defun aria2--refresh ()
-    "Refreshes download list buffer. Or stops refresh timers if buffer doesn't exist."
+    "Refreshes download list buffer."
     (let ((buf (get-buffer aria2-list-buffer-name)))
-        (if buf
-            (with-current-buffer buf (revert-buffer))
-            (aria2--stop-timer))))
+        (when buf (with-current-buffer buf (revert-buffer)))))
 
 (defun aria2--manage-refresh-timer ()
     "Restarts `aria2--refresh-timer' on different intervals, depending on focus and buffer visibility."
     (let ((buf (get-buffer aria2-list-buffer-name)))
         (cl-flet ((retimer (refresh speed)
-                      (when aria2--refresh-timer (cancel-timer aria2--refresh-timer))
-                      (setq aria2--refresh-timer (run-at-time t refresh #'aria2--refresh))
-                      (setq aria2--current-buffer-refresh-speed speed)))
+                      (when (timerp aria2--refresh-timer) (cancel-timer aria2--refresh-timer))
+                      (setq aria2--refresh-timer (run-at-time t refresh #'aria2--refresh)
+                          aria2--current-buffer-refresh-speed speed)))
             (cond
-                ((and (eq buf (window-buffer (selected-window))) ; when list has focus
-                     (not (eq aria2--current-buffer-refresh-speed :fast)))
-                    (retimer aria2-refresh-fast :fast))
-                ((and (get-buffer-window buf) ; list visible but without focus
-                     (not (eq aria2--current-buffer-refresh-speed :normal)))
-                    (retimer aria2-refresh-normal :normal))
-                ((not (eq aria2--current-buffer-refresh-speed :slow)) ; list is in the background
-                    (retimer aria2-refresh-slow :slow))))))
+                ((eq buf (window-buffer (selected-window))) ; when list has focus
+                    (unless (eq aria2--current-buffer-refresh-speed :fast)
+                        (retimer aria2-refresh-fast :fast)))
+                ((get-buffer-window buf) ; list visible but without focus
+                    (unless (eq aria2--current-buffer-refresh-speed :normal)
+                        (retimer aria2-refresh-normal :normal)))
+                (t (unless (eq aria2--current-buffer-refresh-speed :slow) ; list is in the background
+                       (retimer aria2-refresh-slow :slow)))))))
 
 (provide 'aria2-refresh)
 

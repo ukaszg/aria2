@@ -39,8 +39,10 @@
     [
         ("File"     40 t)   ("Status"    7 t)
         ("Type"     13 t)   ("Done"      4 t)
-        ("Download" 12 t)   ("Upload"   12 t)
-        ("Size"     10 nil) ("Error"     0 nil)]
+        ("Download" 12 t    (:right-align t))
+        ("Upload"   12 t    (:right-align t))
+        ("Size"     10 nil  (:right-align t))
+        ("Error"     0 nil)]
     "Format for downloads list columns.")
 
 (defconst aria2--tell-keys
