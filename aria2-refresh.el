@@ -89,7 +89,7 @@
                     (unless (speed-is :fast) (retimer aria2-refresh-fast :fast)))
                 ((get-buffer-window buf) ; list visible but without focus
                     (unless (speed-is :normal) (retimer aria2-refresh-normal :normal)))
-                (t (unless speed-is :slow) (retimer aria2-refresh-slow :slow))))))
+                (t (unless (speed-is :slow) (retimer aria2-refresh-slow :slow)))))))
 
 (provide 'aria2-refresh)
 
