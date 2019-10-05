@@ -94,7 +94,7 @@ If nil Emacs will reattach itself to the process on entering downloads list."
 (define-error 'aria2-err-not-a-torrent-file     "This is not a .torrent file"                  'user-error)
 (define-error 'aria2-err-not-a-metalink-file    "This is not a .metalink file"                 'user-error)
 (define-error 'aria2-err-failed-to-start        "Failed to start"                              'error)
-(define-error 'aria2-err-no-executable          "Couldn't find `aria2' executable, aborting"  'error)
+(define-error 'aria2-err-no-executable          "Couldn't find `aria2c' executable, aborting"  'error)
 (define-error 'aria2-err-no-such-position-type  "Wrong position type"                          'error)
 
 (defconst aria2--codes-to-errors-alist
@@ -182,8 +182,7 @@ If nil Emacs will reattach itself to the process on entering downloads list."
 
 (defmethod Running? ((this aria2-exe))
     "Returns status of managed (we remember the PID) aria2 process."
-    (with-slots (pid) this
-        (and (< 0 pid) (aria2--is-aria-process-p pid))))
+    (with-slots (pid) this (< 0 pid)))
 
 (defmethod Save ((this aria2-exe))
     "Persist controller settings."
@@ -348,8 +347,8 @@ Returns a pair of numbers denoting amount of files deleted and files inserted."
     (Post this "aria2.purgeDownloadResult"))
 
 (defmethod RemoveResult ((this aria2-exe) gid)
-    "Removes a completed/error/removed download denoted by GID from memory."
-    (Post this "aria2.removeDownloadResult" gid))
+    "Stops and removes download denoted by GID from memory."
+    (Post this "aria2.remove" gid))
 
 (defmethod SaveSession ((this aria2-exe))
     "Saves the current session to a `aria2-session-file' file."
